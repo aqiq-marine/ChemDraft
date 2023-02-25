@@ -35,17 +35,19 @@ impl Default for BondType {
     }
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub enum SingleBond {
     #[default]
     Normal,
     Forward,
     Backward,
+    Wide,
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub enum DoubleBond {
     #[default]
     Left,
     Right,
+    Center,
 }

@@ -21,8 +21,14 @@ pub enum StructDrawState {
     #[default]
     AtomFocus,
     BondFocus,
-    Input,
+    Input(InputFor),
     Move,
+}
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum InputFor {
+    #[default]
+    AppendElm,
+    AppendLabelElm,
 }
 
 #[derive(Debug)]
@@ -65,7 +71,7 @@ impl StructDraw {
         match self.mode {
             StructDrawState::AtomFocus => self.hk_on_atom_focus(modifiers, key_code),
             StructDrawState::BondFocus => self.hk_on_bond_focus(modifiers, key_code),
-            StructDrawState::Input => self.hk_on_input_mode(modifiers, key_code),
+            StructDrawState::Input(input_for) => self.hk_on_input_mode(modifiers, key_code, input_for),
             StructDrawState::Move => self.hk_on_move_mode(modifiers, key_code),
         }
         self.canv.clear();
@@ -130,18 +136,16 @@ impl StructDraw {
         }
         if modifiers.is_empty() {
             if let Some(elm) = Self::key2elm(key_code) {
-                let new_atom_id = if let Some(id) = self.focus_atom {
-                    self.chem_struct.append(&id, elm)
-                } else {
-                    Some(self.chem_struct.new_atom(elm))
-                };
-                self.focus_atom = new_atom_id;
+                self.append_elm(elm);
                 return;
             }
             match key_code {
                 // 本当はバックスラッシュ
                 KeyCode::OEM102 => {
-                    self.mode = StructDrawState::Input;
+                    self.mode = StructDrawState::Input(InputFor::AppendElm);
+                },
+                KeyCode::T => {
+                    self.mode = StructDrawState::Input(InputFor::AppendLabelElm);
                 },
                 KeyCode::X => {
                     if let Some(atom) = self.focus_atom {
@@ -208,7 +212,9 @@ impl StructDraw {
                 KeyCode::S => change_bond(BondType::Single(SingleBond::Normal)),
                 KeyCode::F => change_bond(BondType::Single(SingleBond::Forward)),
                 KeyCode::B => change_bond(BondType::Single(SingleBond::Backward)),
+                KeyCode::W => change_bond(BondType::Single(SingleBond::Wide)),
                 KeyCode::D => change_bond(BondType::Double(DoubleBond::Left)),
+                KeyCode::C => change_bond(BondType::Double(DoubleBond::Center)),
                 KeyCode::T => change_bond(BondType::Triple),
                 KeyCode::H => change_bond(BondType::Hidden),
                 KeyCode::R => {
@@ -249,13 +255,21 @@ impl StructDraw {
     fn hk_on_input_mode(
         &mut self,
         modifiers: Modifiers, key_code: KeyCode,
+        input_for: InputFor,
     ) {
         if modifiers.is_empty() {
             if key_code == KeyCode::Enter {
                 self.mode = StructDrawState::AtomFocus;
-                self.focus_atom
-                    .zip(Element::from_symbol(self.input.as_str()))
-                    .map(|(atom, elm)| self.chem_struct.append(&atom, elm));
+                match input_for {
+                    InputFor::AppendElm => {
+                        Element::from_symbol(self.input.as_str())
+                            .map(|elm| self.append_elm(elm));
+                    },
+                    InputFor::AppendLabelElm => {
+                        self.append_elm(Element::Text(self.input.clone()));
+                    },
+                }
+                self.input = String::new();
                 return;
             }
             if key_code == KeyCode::Backspace {
@@ -276,6 +290,15 @@ impl StructDraw {
             let key = Self::key2string(key_code).to_uppercase();
             self.input += key.as_str();
         }
+    }
+    fn append_elm(&mut self, elm: Element) {
+        let new_atom_id = if let Some(id) = self.focus_atom {
+            self.chem_struct.append(&id, elm)
+        } else {
+            Some(self.chem_struct.new_atom(elm))
+        };
+        self.focus_atom = new_atom_id;
+        return;
     }
     fn key2string(key_code: KeyCode) -> String {
         if KeyCode::A <= key_code && key_code <= KeyCode::Z {
@@ -332,22 +355,39 @@ impl StructDraw {
             SingleBond::Normal => Self::draw_norm_single_bond(frame, from, to, stroke),
             SingleBond::Forward => Self::draw_forward_single_bond(frame, from, to),
             SingleBond::Backward => Self::draw_backward_single_bond(frame, from, to),
+            SingleBond::Wide => {
+                let width = 4.0 * stroke.width;
+                let stroke = stroke.with_width(width);
+                Self::draw_norm_single_bond(frame, from, to, stroke)
+            },
         }
     }
     fn draw_double_bond(frame: &mut Frame, double_type: &DoubleBond, from: &Vector, to: &Vector, stroke: Stroke) {
         let mut path = Builder::new();
-        path.move_to(from.into());
-        path.line_to(to.into());
         let vv = to - from;
         let vv = &vv;
-        let hv = 4.0 * vv.rotate(PI / 2.0).norm();
-        let hv = hv * match double_type {
-            DoubleBond::Left => 1.0,
-            DoubleBond::Right => -1.0,
-        };
+        let width = 4.0;
+        let hv = width * vv.rotate(PI / 2.0).norm();
         let hv = &hv;
-        path.move_to((from + 0.1 * vv + hv).into());
-        path.line_to((to - 0.1 * vv + hv).into());
+        let draw_left_right_bond = |path: &mut Builder, d: f64| {
+            let pad = 0.1;
+            path.move_to(from.into());
+            path.line_to(to.into());
+            path.move_to((from + pad * vv + d * hv).into());
+            path.line_to((to - pad * vv + d * hv).into());
+        };
+        match double_type {
+            DoubleBond::Left => draw_left_right_bond(&mut path, 1.0),
+            DoubleBond::Right => draw_left_right_bond(&mut path, -1.0),
+            DoubleBond::Center => {
+                let pad = width / 2.0 / f64::sqrt(3.0);
+                let vv = &vv.norm();
+                path.move_to((from - pad * vv - 0.5 * hv).into());
+                path.line_to((to + pad * vv - 0.5 * hv).into());
+                path.move_to((from - pad * vv + 0.5 * hv).into());
+                path.line_to((to + pad * vv + 0.5 * hv).into());
+            },
+        }
         let path = path.build();
         frame.stroke(&path, stroke);
     }
@@ -374,18 +414,19 @@ impl StructDraw {
     }
     fn draw_forward_single_bond(frame: &mut Frame, from: &Vector, to: &Vector) {
         let mut path = Builder::new();
-        let hv = 5.0 * (to - from).rotate(PI / 2.0).norm();
+        let hv = 3.0 * (to - from).rotate(PI / 2.0).norm();
         let hv = &hv;
-        path.move_to(from.into());
+        path.move_to((from - 0.3 * hv).into());
         path.line_to((to - hv).into());
         path.line_to((to + hv).into());
+        path.move_to((from + 0.3 * hv).into());
         path.close();
         let path = path.build();
         frame.fill(&path, Color::BLACK);
     }
     fn draw_backward_single_bond(frame: &mut Frame, from: &Vector, to: &Vector) {
         let mut path = Builder::new();
-        let hv = 5.0 * (to - from).rotate(PI / 2.0).norm();
+        let hv = 3.0 * (to - from).rotate(PI / 2.0).norm();
         let hv = &hv;
         let length = (to - from).dist();
         let step_len = 4.0;
@@ -504,7 +545,7 @@ impl Program<Message> for StructDraw {
                 StructDrawState::Move => {
                     Self::mark_select_area(frame, &select_area_left_top, self.select_area_size, self.focus_color);
                 },
-                StructDrawState::Input => {
+                StructDrawState::Input(_) => {
                     Self::write_text(frame, self.input.clone());
                 },
             }
