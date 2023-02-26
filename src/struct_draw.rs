@@ -304,7 +304,16 @@ impl StructDraw {
         if KeyCode::A <= key_code && key_code <= KeyCode::Z {
             return format!("{:?}", key_code);
         }
-        return String::new();
+        if KeyCode::Key1 <= key_code && key_code <= KeyCode::Key9 {
+            return format!("{:?}", key_code).chars().nth(3)
+                .map_or(String::new(), |c| c.to_string());
+        }
+        match key_code {
+            KeyCode::Equals => String::from("+"),
+            KeyCode::Minus => String::from("-"),
+            KeyCode::Space => String::from(" "),
+            _ => String::new(),
+        }
     }
     fn hk_on_move_mode(
         &mut self,
@@ -445,10 +454,12 @@ impl StructDraw {
     fn draw_element(frame: &mut Frame, atom: &Atom, bg_color: Color) {
         let size = 25.0;
         let p = &atom.get_point();
-        let bg = Path::circle(p.into(), size / 2.0);
-        frame.fill(&bg, bg_color);
-        let text = canvas::Text {
-            content: atom.get_element().symbol(),
+        if atom.get_element() != Element::Text(String::new()) {
+            let bg = Path::circle(p.into(), size / 2.0);
+            frame.fill(&bg, bg_color);
+        }
+        let setting = canvas::Text {
+            content: String::new(),
             position: p.into(),
             color: Color::BLACK,
             size,
@@ -456,20 +467,112 @@ impl StructDraw {
             horizontal_alignment: iced::alignment::Horizontal::Center,
             vertical_alignment: iced::alignment::Vertical::Center,
         };
-        frame.fill_text(text);
+        let text = Self::string2text(atom.symbol(), setting);
+        for t in text {
+            frame.fill_text(t);
+        }
     }
     fn write_text(frame: &mut Frame, input: String) {
         let size = 25.0;
-        let text = canvas::Text {
-            content: input,
-            position: iced::Point::new(0.0, frame.height()),
+        let pad = size / 3.0;
+        let set = canvas::Text {
+            content: String::new(),
+            position: iced::Point::new(0.0, frame.height() - pad),
             color: Color::BLACK,
             size,
             font: iced::Font::Default,
             horizontal_alignment: iced::alignment::Horizontal::Left,
             vertical_alignment: iced::alignment::Vertical::Bottom,
         };
-        frame.fill_text(text);
+        let text = Self::string2text(input, set);
+        for t in text {
+            frame.fill_text(t);
+        }
+    }
+    fn string2text(
+        text: String,
+        default_setting: canvas::Text
+    ) -> Vec<canvas::Text> {
+        let mut result = vec![];
+        let mut cur_norm_text = String::new();
+        let mut cur_low_up_text = String::new();
+        let height = 0.75 * default_setting.size;
+        let aspect = 0.5;
+        let mut v = iced::Vector::new(0.0, 0.0);
+        let append = |t: &mut String, setting: &canvas::Text, v: &mut iced::Vector, result: &mut Vec<canvas::Text>| {
+            result.push(canvas::Text {
+                content: t.clone(),
+                position: setting.position + *v,
+                ..setting.clone()
+            });
+            *v = *v + iced::Vector::new(setting.size * aspect * t.len() as f32, 0.0);
+            t.clear();
+        };
+        let up_low_size_ratio = 2.0 / 3.0;
+        let upper_y = match default_setting.vertical_alignment {
+            iced::alignment::Vertical::Top => up_low_size_ratio / 2.0,
+            iced::alignment::Vertical::Center => 0.5,
+            iced::alignment::Vertical::Bottom => 1.0 - up_low_size_ratio / 2.0,
+        };
+        let lower_y = upper_y - 1.0 + 0.2;
+        let left_x = text.len() as f32 * height * aspect * match default_setting.horizontal_alignment {
+            iced::alignment::Horizontal::Left => 0.0,
+            iced::alignment::Horizontal::Center => 0.5,
+            iced::alignment::Horizontal::Right => 1.0,
+        };
+        let default_setting = canvas::Text {
+            position: default_setting.position - iced::Vector::new(left_x, 0.0),
+            horizontal_alignment: iced::alignment::Horizontal::Left,
+            ..default_setting
+        };
+        let upper = canvas::Text {
+            position: iced::Point {
+                x: default_setting.position.x,
+                y: default_setting.position.y - upper_y * height,
+            },
+            size: default_setting.size * 2.0 / 3.0,
+            ..default_setting.clone()
+        };
+        let lower = canvas::Text {
+            position: iced::Point {
+                x: default_setting.position.x,
+                y: default_setting.position.y - lower_y * height,
+            },
+            size: default_setting.size * 2.0 / 3.0,
+            ..default_setting.clone()
+        };
+        for c in text.chars() {
+            match c {
+                '0'..='9' => {
+                    if !cur_norm_text.is_empty() {
+                        append(&mut cur_norm_text, &default_setting, &mut v, &mut result);
+                    }
+                    cur_low_up_text.push(c);
+                },
+                'a'..='z' | 'A'..='Z' => {
+                    if !cur_low_up_text.is_empty() {
+                        append(&mut cur_low_up_text, &lower, &mut v, &mut result);
+                    }
+                    cur_norm_text.push(c);
+                },
+                '+' | '-' => {
+                    if !cur_norm_text.is_empty() {
+                        append(&mut cur_norm_text, &default_setting, &mut v, &mut result);
+                    }
+                    cur_low_up_text.push(c);
+                    append(&mut cur_low_up_text, &upper, &mut v, &mut result);
+                },
+                ' ' => {
+                    if !cur_low_up_text.is_empty() {
+                        append(&mut cur_low_up_text, &lower, &mut v, &mut result);
+                    }
+                },
+                _ => {},
+            }
+        }
+        append(&mut cur_norm_text, &default_setting, &mut v, &mut result);
+        append(&mut cur_low_up_text, &lower, &mut v, &mut result);
+        return result;
     }
     fn mark_atom(frame: &mut Frame, p: &Vector, color: Color) {
         let mark = Path::circle(p.into(), 25.0 / 2.0);

@@ -18,6 +18,7 @@ mod vector;
 fn main() -> iced::Result {
     ChemDraft::run(Settings {
         antialiasing: true,
+        default_font: Some(include_bytes!("../fonts/Myrica.TTC")),
         window: iced::window::Settings {
             size: (1024, 512),
             ..iced::window::Settings::default()
@@ -43,6 +44,10 @@ impl Application for ChemDraft {
         )
     }
     fn title(&self) -> String {
+        // 候補
+        // ChemDraft
+        // ChemicalDesignDraft
+        // StructureDrawer
         String::from("Chemical Structure Drawer")
     }
     fn update(&mut self, message: Self::Message) -> Command<Self::Message> {

@@ -32,6 +32,19 @@ impl Atom {
     pub fn get_element(&self) -> Element {
         self.elm.clone()
     }
+    pub fn symbol(&self) -> String {
+        let symbol = self.elm.symbol();
+        if self.charge == 0 {
+            return symbol;
+        }
+        let mut charge = if self.charge.abs() > 1 {
+            self.charge.abs().to_string()
+        } else {
+            String::new()
+        };
+        charge.push(if self.charge > 0 {'+'} else {'-'});
+        return symbol + " " + charge.as_str();
+    }
     pub fn move_atom(&mut self, v: &Vector) {
         self.p = &self.p + v;
     }
@@ -151,7 +164,6 @@ impl ChemStruct {
         self.atoms.get(&atom_id).map(|atom| atom.get_point())
     }
     pub fn delete(&mut self, atom_id: &AtomId) -> Option<AtomId> {
-        println!("{}", self.atoms.len());
         if !self.atoms.contains_key(atom_id) {
             return None;
         }
@@ -505,19 +517,31 @@ impl ChemStruct {
     fn get_atoms_on_carbon_omit(&self) -> Vec<Atom> {
         let mut result = self.atoms.clone();
         let mut bond_count = 0;
+        let ins_charged_carbon = |result: &mut HashMap<i32, Atom>, id: &AtomId| {
+            if let Element::C(_) = self.atoms[id].elm {
+                result.remove(id);
+                if self.atoms[id].charge != 0 {
+                    let mut dummy = Atom::new(Element::Text(String::new()), self.atoms[id].get_point());
+                    dummy.charge = self.atoms[id].charge;
+                    result.insert(*id, dummy);
+                    return true;
+                }
+            }
+            return false;
+        };
+
         for ((atom1, atom2), bond_type) in &self.bonds {
             let bond_order: i32 = bond_type.into();
             bond_count += bond_order;
+            let atom1_charged = ins_charged_carbon(&mut result, atom1);
+            let atom2_charged = ins_charged_carbon(&mut result, atom2);
             if self.is_carbon_hydrogen_bond(atom1, atom2) {
-                result.remove(atom1);
-                result.remove(atom2);
-                continue;
-            }
-            if let Element::C(_) = self.atoms[atom1].elm {
-                result.remove(atom1);
-            }
-            if let Element::C(_) = self.atoms[atom2].elm {
-                result.remove(atom2);
+                if !atom1_charged {
+                    result.remove(atom1);
+                }
+                if !atom2_charged {
+                    result.remove(atom2);
+                }
             }
         }
         if bond_count <= 7 {
