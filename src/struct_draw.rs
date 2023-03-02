@@ -11,7 +11,7 @@ use iced::{
 use std::f64::consts::PI;
 use crate::message::Message;
 
-use crate::element::Element;
+use crate::element::{Element, Nuclide};
 use crate::chem_struct::{self, ChemStruct, Atom};
 use crate::bond_type::{BondType, SingleBond, DoubleBond};
 use crate::vector::Vector;
@@ -136,7 +136,7 @@ impl StructDraw {
         }
         if modifiers.is_empty() {
             if let Some(elm) = Self::key2elm(key_code) {
-                self.append_elm(elm);
+                self.append_nuclide(elm);
                 return;
             }
             match key_code {
@@ -165,7 +165,7 @@ impl StructDraw {
             _ => Vector::new(0.0, 0.0),
         }
     }
-    fn key2elm(key_code: KeyCode) -> Option<Element> {
+    fn key2elm(key_code: KeyCode) -> Option<Nuclide> {
         let symbol = match key_code {
             KeyCode::H => "H",
             KeyCode::B => "B",
@@ -178,7 +178,7 @@ impl StructDraw {
             KeyCode::K => "K",
             _ => "",
         };
-        return Element::from_symbol(symbol);
+        return Element::from_symbol(symbol).map(|elm| elm.into());
     }
     fn hk_on_bond_focus(
         &mut self,
@@ -263,10 +263,10 @@ impl StructDraw {
                 match input_for {
                     InputFor::AppendElm => {
                         Element::from_symbol(self.input.as_str())
-                            .map(|elm| self.append_elm(elm));
+                            .map(|elm| self.append_nuclide(elm.into()));
                     },
                     InputFor::AppendLabelElm => {
-                        self.append_elm(Element::Text(self.input.clone()));
+                        self.append_nuclide(Element::Text(self.input.clone()).into());
                     },
                 }
                 self.input = String::new();
@@ -287,15 +287,19 @@ impl StructDraw {
             self.input += key.as_str();
         }
         if modifiers.shift() {
+            if key_code == KeyCode::Key7 {
+                self.input += "'";
+                return;
+            }
             let key = Self::key2string(key_code).to_uppercase();
             self.input += key.as_str();
         }
     }
-    fn append_elm(&mut self, elm: Element) {
+    fn append_nuclide(&mut self, nuclide: Nuclide) {
         let new_atom_id = if let Some(id) = self.focus_atom {
-            self.chem_struct.append(&id, elm)
+            self.chem_struct.append(&id, nuclide)
         } else {
-            Some(self.chem_struct.new_atom(elm))
+            Some(self.chem_struct.new_atom(nuclide))
         };
         self.focus_atom = new_atom_id;
         return;
@@ -474,10 +478,11 @@ impl StructDraw {
     }
     fn write_text(frame: &mut Frame, input: String) {
         let size = 25.0;
-        let pad = size / 3.0;
+        let v_pad = size / 3.0;
+        let h_pad = 4.0 * size;
         let set = canvas::Text {
             content: String::new(),
-            position: iced::Point::new(0.0, frame.height() - pad),
+            position: iced::Point::new(h_pad, frame.height() - v_pad),
             color: Color::BLACK,
             size,
             font: iced::Font::Default,
@@ -496,9 +501,15 @@ impl StructDraw {
         let mut result = vec![];
         let mut cur_norm_text = String::new();
         let mut cur_low_up_text = String::new();
-        let height = 0.75 * default_setting.size;
+        let height = default_setting.size;
         let aspect = 0.5;
-        let mut v = iced::Vector::new(0.0, 0.0);
+        let mut cursor_p = iced::Vector::new(0.0, 0.0);
+        let pad = iced::Vector::new(height * aspect * match default_setting.horizontal_alignment {
+            iced::alignment::Horizontal::Left => 0.0,
+            iced::alignment::Horizontal::Center => 0.5,
+            iced::alignment::Horizontal::Right => 1.0,
+        }, 0.0);
+        let mut accent = pad.clone();
         let append = |t: &mut String, setting: &canvas::Text, v: &mut iced::Vector, result: &mut Vec<canvas::Text>| {
             result.push(canvas::Text {
                 content: t.clone(),
@@ -515,13 +526,7 @@ impl StructDraw {
             iced::alignment::Vertical::Bottom => 1.0 - up_low_size_ratio / 2.0,
         };
         let lower_y = upper_y - 1.0 + 0.2;
-        let left_x = text.len() as f32 * height * aspect * match default_setting.horizontal_alignment {
-            iced::alignment::Horizontal::Left => 0.0,
-            iced::alignment::Horizontal::Center => 0.5,
-            iced::alignment::Horizontal::Right => 1.0,
-        };
         let default_setting = canvas::Text {
-            position: default_setting.position - iced::Vector::new(left_x, 0.0),
             horizontal_alignment: iced::alignment::Horizontal::Left,
             ..default_setting
         };
@@ -545,33 +550,42 @@ impl StructDraw {
             match c {
                 '0'..='9' => {
                     if !cur_norm_text.is_empty() {
-                        append(&mut cur_norm_text, &default_setting, &mut v, &mut result);
+                        append(&mut cur_norm_text, &default_setting, &mut cursor_p, &mut result);
                     }
                     cur_low_up_text.push(c);
                 },
                 'a'..='z' | 'A'..='Z' => {
                     if !cur_low_up_text.is_empty() {
-                        append(&mut cur_low_up_text, &lower, &mut v, &mut result);
+                        append(&mut cur_low_up_text, &lower, &mut cursor_p, &mut result);
                     }
                     cur_norm_text.push(c);
                 },
                 '+' | '-' => {
                     if !cur_norm_text.is_empty() {
-                        append(&mut cur_norm_text, &default_setting, &mut v, &mut result);
+                        append(&mut cur_norm_text, &default_setting, &mut cursor_p, &mut result);
                     }
                     cur_low_up_text.push(c);
-                    append(&mut cur_low_up_text, &upper, &mut v, &mut result);
+                    append(&mut cur_low_up_text, &upper, &mut cursor_p, &mut result);
                 },
                 ' ' => {
                     if !cur_low_up_text.is_empty() {
-                        append(&mut cur_low_up_text, &lower, &mut v, &mut result);
+                        append(&mut cur_low_up_text, &lower, &mut cursor_p, &mut result);
                     }
+                },
+                '\'' => {
+                    accent = pad + cursor_p + iced::Vector::new(
+                        lower.size * aspect * cur_low_up_text.len() as f32
+                        + default_setting.size * aspect * cur_norm_text.len() as f32,
+                        0.0);
                 },
                 _ => {},
             }
         }
-        append(&mut cur_norm_text, &default_setting, &mut v, &mut result);
-        append(&mut cur_low_up_text, &lower, &mut v, &mut result);
+        append(&mut cur_norm_text, &default_setting, &mut cursor_p, &mut result);
+        append(&mut cur_low_up_text, &lower, &mut cursor_p, &mut result);
+        for t in result.iter_mut() {
+            t.position = t.position - accent;
+        }
         return result;
     }
     fn mark_atom(frame: &mut Frame, p: &Vector, color: Color) {

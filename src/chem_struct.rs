@@ -1,12 +1,13 @@
 use crate::bond_type::{BondType, DoubleBond, SingleBond};
-use crate::element::Element;
+use crate::element::{Element, Nuclide};
 use crate::vector::Vector;
 use std::collections::HashMap;
 use std::f64::consts::PI;
+use sqlite::{Connection, State};
 
 #[derive(Debug, Clone)]
 pub struct Atom {
-    elm: Element,
+    nuclide: Nuclide,
     charge: i32,
     p: Vector,
 }
@@ -15,7 +16,7 @@ impl Default for Atom {
     fn default() -> Self {
         let p = Vector::new(512.0, 512.0);
         Atom {
-            elm: Element::default(),
+            nuclide: Nuclide::default(),
             charge: 0,
             p,
         }
@@ -23,17 +24,20 @@ impl Default for Atom {
 }
 
 impl Atom {
-    pub fn new(elm: Element, p: Vector) -> Atom {
-        Atom { elm, charge: 0, p }
+    pub fn new(elm: Nuclide, p: Vector) -> Atom {
+        Atom { nuclide: elm, charge: 0, p }
     }
     pub fn get_point(&self) -> Vector {
         self.p.clone()
     }
     pub fn get_element(&self) -> Element {
-        self.elm.clone()
+        self.nuclide.elm.clone()
+    }
+    pub fn get_nuclide(&self) -> Nuclide {
+        self.nuclide.clone()
     }
     pub fn symbol(&self) -> String {
-        let symbol = self.elm.symbol();
+        let symbol = self.nuclide.elm.symbol();
         if self.charge == 0 {
             return symbol;
         }
@@ -99,6 +103,44 @@ pub enum DisplayMode {
     CarbonOmit,
 }
 
+pub struct Compound {
+    atoms: Vec<(AtomId, Atom)>,
+    bonds: Vec<(AtomId, AtomId, BondType)>,
+    focus: AtomId,
+}
+
+pub struct DBWrapper {
+    compound_db: Connection,
+}
+impl std::fmt::Debug for DBWrapper {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "DBWrapper")
+    }
+}
+impl DBWrapper {
+    pub fn new(path: &str) -> Self {
+        let compound_db = Connection::open(path).unwrap();
+        DBWrapper { compound_db}
+    }
+    pub fn get_compound(&self, name: &str) -> Option<Compound> {
+        None
+    }
+    fn get_atoms(&self, name: &str) -> Vec<(AtomId, Atom)> {
+        let query = format!("SELECT * FROM atoms WHERE compound_id = {}", name);
+        self.compound_db
+            .prepare(query)
+            .unwrap()
+            .into_iter()
+            .map(|row| {
+                let row = row.unwrap();
+                let id = row.read::<i64, _>("id") as i32;
+                let elm = Element::from_atomic_number(row.read::<i64, _>("elm_id") as i32);
+                (1, Atom::new(Element::default().into(), Vector::default()))
+            })
+            .collect::<Vec<(AtomId, Atom)>>()
+    }
+}
+
 #[derive(Debug)]
 pub struct ChemStruct {
     atoms: HashMap<AtomId, Atom>,
@@ -106,6 +148,7 @@ pub struct ChemStruct {
     next_id: AtomId,
     display_mode: DisplayMode,
     bond_len: f64,
+    compound_db: DBWrapper,
 }
 
 impl Default for ChemStruct {
@@ -123,18 +166,21 @@ impl Default for ChemStruct {
         let bonds = HashMap::new();
         let next_id = 1;
         let display_mode = DisplayMode::default();
+        let db_path = "../data/basic_compound.db";
+        let db = DBWrapper::new(db_path);
         ChemStruct {
             atoms,
             bonds,
             next_id,
             display_mode,
             bond_len,
+            compound_db: db,
         }
     }
 }
 
 impl ChemStruct {
-    pub fn new_atom(&mut self, elm: Element) -> AtomId {
+    pub fn new_atom(&mut self, elm: Nuclide) -> AtomId {
         let p = Vector::new(512.0, 256.0);
         let new_atom = Atom::new(elm, p);
         let new_atom_id = self.next_id;
@@ -143,7 +189,7 @@ impl ChemStruct {
         self.compensate_hydrogen(&new_atom_id, 0);
         return new_atom_id;
     }
-    pub fn append(&mut self, atom_id: &AtomId, elm: Element) -> Option<AtomId> {
+    pub fn append(&mut self, atom_id: &AtomId, elm: Nuclide) -> Option<AtomId> {
         if !self.atoms.contains_key(atom_id) {
             return None;
         }
@@ -164,21 +210,18 @@ impl ChemStruct {
         self.atoms.get(&atom_id).map(|atom| atom.get_point())
     }
     pub fn delete(&mut self, atom_id: &AtomId) -> Option<AtomId> {
+        println!("{}", self.atoms.len());
         if !self.atoms.contains_key(atom_id) {
             return None;
         }
-        let is_h = if let Element::H(_) = self.atoms[atom_id].elm {
-            true
-        } else {
-            false
-        };
+        let is_h = Element::H == self.atoms[atom_id].nuclide.elm;
         self.atoms.remove(&atom_id);
         let connected_bonds = self.get_connected_bonds(atom_id);
         let mut connected_atom = None;
         for bond in connected_bonds {
             let other = Self::get_other(&bond, atom_id);
             self.bonds.remove(&bond);
-            if let Element::H(_) = self.atoms[&other].elm {
+            if Element::H == self.atoms[&other].nuclide.elm {
                 // 結合は先に削除してある
                 // 孤立している水素を削除
                 if !is_h && self.get_connected_bonds(&other).len() == 0 {
@@ -198,7 +241,7 @@ impl ChemStruct {
         let mut other_elm = None;
         for (id, atom) in self.atoms.iter() {
             if atom.get_point().is_in_rect(left_top, right_bot) {
-                if let Element::H(_) = self.atoms[id].elm {
+                if Element::H == self.atoms[id].nuclide.elm {
                     hydrogen = Some(*id);
                 } else {
                     other_elm = Some(*id);
@@ -293,7 +336,10 @@ impl ChemStruct {
     }
     pub fn increase_charge(&mut self, atom_id: &AtomId, increase: i32) {
         self.atoms.get_mut(atom_id)
-            .map(|atom| atom.increase_charge(increase));
+            .map(|atom| {
+                atom.increase_charge(increase);
+            });
+        self.recompensate(atom_id);
     }
     pub fn connect_atoms(&mut self, atom1: &AtomId, atom2: &AtomId) -> Option<(AtomId, AtomId)> {
         if !self.atoms.contains_key(atom1) || !self.atoms.contains_key(atom2) || atom1 == atom2 {
@@ -433,16 +479,13 @@ impl ChemStruct {
     fn get_connected_atoms_except_h(&self, atom_id: &AtomId) -> Vec<AtomId> {
         self.get_connected_atoms(atom_id)
             .into_iter()
-            .filter(|&atom| match self.atoms[&atom].elm {
-                Element::H(_) => false,
-                _ => true,
-            })
+            .filter(|&atom| self.atoms[&atom].nuclide.elm == Element::H)
             .collect()
     }
     fn compensate_hydrogen(&mut self, atom_id: &AtomId, bond_order: i32) {
-        let v = self.atoms[atom_id].elm.get_valences() - bond_order;
+        let v = self.atoms[atom_id].nuclide.elm.get_valences() - bond_order;
         for _ in 0..v {
-            self.append(atom_id, Element::H(0));
+            self.append(atom_id, Element::H.into());
         }
     }
     fn delete_hydrogen(&mut self, atom_id: &AtomId) {
@@ -484,7 +527,7 @@ impl ChemStruct {
             if &atom1 == atom_id {
                 other = atom2;
             }
-            if let Element::H(_) = self.atoms[&other].elm {
+            if self.atoms[&other].nuclide.elm == Element::H {
                 let bond = self.get_connected_bonds(&other);
                 let td = axis.dot(&v).abs();
                 if bond.len() == 1 && td > dot {
@@ -518,10 +561,10 @@ impl ChemStruct {
         let mut result = self.atoms.clone();
         let mut bond_count = 0;
         let ins_charged_carbon = |result: &mut HashMap<i32, Atom>, id: &AtomId| {
-            if let Element::C(_) = self.atoms[id].elm {
+            if self.atoms[id].nuclide.elm == Element::C {
                 result.remove(id);
                 if self.atoms[id].charge != 0 {
-                    let mut dummy = Atom::new(Element::Text(String::new()), self.atoms[id].get_point());
+                    let mut dummy = Atom::new(Element::Text(String::new()).into(), self.atoms[id].get_point());
                     dummy.charge = self.atoms[id].charge;
                     result.insert(*id, dummy);
                     return true;
@@ -590,8 +633,8 @@ impl ChemStruct {
     }
 
     fn is_carbon_hydrogen_bond(&self, atom1: &AtomId, atom2: &AtomId) -> bool {
-        let atom_num1 = self.atoms[atom1].elm.get_atomic_number();
-        let atom_num2 = self.atoms[atom2].elm.get_atomic_number();
+        let atom_num1 = self.atoms[atom1].nuclide.elm.get_atomic_number();
+        let atom_num2 = self.atoms[atom2].nuclide.elm.get_atomic_number();
         let carbon = 6;
         let hydrogen = 1;
         return atom_num1 == carbon && atom_num2 == hydrogen
