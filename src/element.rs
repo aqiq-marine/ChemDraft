@@ -16,7 +16,7 @@ impl Default for Element {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Nuclide {
     pub elm: Element,
-    neutron_num: NeutronNum,
+    pub neutron_num: NeutronNum,
 }
 
 impl Default for Nuclide {

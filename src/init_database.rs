@@ -1,5 +1,6 @@
 use sqlite::Connection;
 use crate::element::Element;
+use crate::bond_type::BondType;
 
 pub fn init_database() {
     let db_path = "../data/basic_compounds.db";
@@ -19,25 +20,24 @@ fn insert_element(con: &Connection) {
 }
 
 fn insert_bond_type(con: &Connection) {
-    let ins = |id: i64, name: &str| {
+    let ins = |id: i32, name: &str| {
         let query = format!("INSERT INTO bond_type VALUES ({}, '{}')", id, name);
         con.execute(query).unwrap();
     };
-    ins(1, "NormalSingleBond");
-    ins(2, "ForwardSingleBond");
-    ins(3, "BackwardSingleBond");
-    ins(4, "WideSingleBond");
-    ins(5, "LeftDoubleBond");
-    ins(6, "CenterDoubleBond");
-    ins(7, "RightDoubleBond");
-    ins(8, "TripleBond");
+    for i in 1..10 {
+        ins(i, format!("{:?}", BondType::from_id(i)).as_str());
+    }
 }
 
 fn create_database(con: &Connection) {
     let query = "
         CREATE TABLE elements (id INTEGER, symbol TEXT, PRIMARY KEY (id));
         CREATE TABLE bond_type (id INTEGER, name TEXT, PRIMARY KEY (id));
-        create table compounds (id INTEGER, name TEXT, PRIMARY KEY (id));
+        create table compounds (
+            id INTEGER,
+            name TEXT,
+            PRIMARY KEY (id)
+        );
         
         CREATE TABLE atoms (
             compound_id INTEGER,
@@ -59,6 +59,12 @@ fn create_database(con: &Connection) {
             PRIMARY KEY (compound_id, from_atom, to_atom),
             FOREIGN KEY (compound_id, from_atom) REFERENCES atoms(compound_id, id),
             FOREIGN KEY (compound_id, to_atom) REFERENCES atoms(compound_id, id)
+        );
+        CREATE TABLE focuses (
+            compound_id INTEGER,
+            focus_atom INTEGER,
+            PRIMARY KEY (compound_id),
+            FOREIGN KEY (compound_id, focus_atom) REFERENCES atoms(compound_id, id)
         );";
         con.execute(query).unwrap();
 }

@@ -14,7 +14,7 @@ mod element;
 mod bond_type;
 mod chem_struct;
 mod vector;
-// mod init_database;
+mod init_database;
 
 fn main() -> iced::Result {
     // init_database::init_database();

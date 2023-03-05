@@ -29,6 +29,7 @@ pub enum InputFor {
     #[default]
     AppendElm,
     AppendLabelElm,
+    Save,
 }
 
 #[derive(Debug)]
@@ -122,6 +123,9 @@ impl StructDraw {
                         self.selected_atom = None;
                     }
                 },
+                KeyCode::S  => {
+                    self.mode = StructDrawState::Input(InputFor::Save);
+                }
                 _ => {},
             }
         }
@@ -263,11 +267,22 @@ impl StructDraw {
                 match input_for {
                     InputFor::AppendElm => {
                         Element::from_symbol(self.input.as_str())
-                            .map(|elm| self.append_nuclide(elm.into()));
+                            .map(|elm| self.append_nuclide(elm.into()))
+                            .or_else(|| {
+                                let focus = self.chem_struct.new_compound(self.input.as_str());
+                                self.focus_atom = focus.or(self.focus_atom);
+                                focus.map(|_| ())
+                            });
                     },
                     InputFor::AppendLabelElm => {
                         self.append_nuclide(Element::Text(self.input.clone()).into());
                     },
+                    InputFor::Save => {
+                        let result = self.chem_struct.save_compound(self.input.as_str(), self.focus_atom.clone());
+                        if let Err(err) = result {
+                            println!("{}", err);
+                        }
+                    }
                 }
                 self.input = String::new();
                 return;
@@ -302,7 +317,6 @@ impl StructDraw {
             Some(self.chem_struct.new_atom(nuclide))
         };
         self.focus_atom = new_atom_id;
-        return;
     }
     fn key2string(key_code: KeyCode) -> String {
         if KeyCode::A <= key_code && key_code <= KeyCode::Z {
@@ -340,17 +354,14 @@ impl StructDraw {
         if modifiers.is_empty() {
             if key_code == KeyCode::Enter {
                 let right_bot = &self.select_area_top_left + self.select_area_size * Vector::new(1.0, 1.0);
-                self.focus_atom = self.chem_struct.get_atom_in_rect(&self.select_area_top_left, &right_bot);
-                self.mode = StructDrawState::AtomFocus;
+                let focus_atom = self.chem_struct.get_atom_in_rect(&self.select_area_top_left, &right_bot);
+                if focus_atom.is_some() {
+                    self.focus_atom = focus_atom;
+                    self.mode = StructDrawState::AtomFocus;
+                }
                 return;
             }
-            let v = self.select_area_size * match key_code {
-                KeyCode::H => Vector::new(-1.0, 0.0),
-                KeyCode::J => Vector::new(0.0, 1.0),
-                KeyCode::K => Vector::new(0.0, -1.0),
-                KeyCode::L => Vector::new(1.0, 0.0),
-                _ => Vector::new(0.0, 0.0),
-            };
+            let v = self.select_area_size * Self::key2direc(key_code);
             self.select_area_top_left.add(&v);
         }
     }
@@ -476,23 +487,25 @@ impl StructDraw {
             frame.fill_text(t);
         }
     }
-    fn write_text(frame: &mut Frame, input: String) {
+    fn write_text(frame: &mut Frame, input: String, center_hint_color: Color) {
         let size = 25.0;
         let v_pad = size / 3.0;
-        let h_pad = 4.0 * size;
+        let center = iced::Point::new(4.0 * size, frame.height() - v_pad - 0.5 * size);
         let set = canvas::Text {
             content: String::new(),
-            position: iced::Point::new(h_pad, frame.height() - v_pad),
+            position: center.into(),
             color: Color::BLACK,
             size,
             font: iced::Font::Default,
-            horizontal_alignment: iced::alignment::Horizontal::Left,
-            vertical_alignment: iced::alignment::Vertical::Bottom,
+            horizontal_alignment: iced::alignment::Horizontal::Center,
+            vertical_alignment: iced::alignment::Vertical::Center,
         };
         let text = Self::string2text(input, set);
         for t in text {
             frame.fill_text(t);
         }
+
+        Self::mark_atom(frame, &Vector::from(center), center_hint_color);
     }
     fn string2text(
         text: String,
@@ -663,7 +676,7 @@ impl Program<Message> for StructDraw {
                     Self::mark_select_area(frame, &select_area_left_top, self.select_area_size, self.focus_color);
                 },
                 StructDrawState::Input(_) => {
-                    Self::write_text(frame, self.input.clone());
+                    Self::write_text(frame, self.input.clone(), hint_color);
                 },
             }
         });

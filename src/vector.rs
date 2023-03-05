@@ -3,8 +3,8 @@ use std::f64::consts::PI;
 
 #[derive(Debug, Default, Clone)]
 pub struct Vector {
-    x: f64,
-    y: f64,
+    pub x: f64,
+    pub y: f64,
 }
 
 impl ops::Add<&Vector> for &Vector {
@@ -201,5 +201,10 @@ impl Into<iced::Point> for &Vector {
 impl Into<iced::Point> for Vector {
     fn into(self) -> iced::Point {
         (&self).into()
+    }
+}
+impl From<iced::Point> for Vector {
+    fn from(v: iced::Point) -> Self {
+        Vector::new(v.x as f64, v.y as f64)
     }
 }

@@ -103,10 +103,11 @@ pub enum DisplayMode {
     CarbonOmit,
 }
 
+#[derive(Debug)]
 pub struct Compound {
     atoms: Vec<(AtomId, Atom)>,
     bonds: Vec<(AtomId, AtomId, BondType)>,
-    focus: AtomId,
+    focus: Option<AtomId>,
 }
 
 pub struct DBWrapper {
@@ -122,11 +123,74 @@ impl DBWrapper {
         let compound_db = Connection::open(path).unwrap();
         DBWrapper { compound_db}
     }
-    pub fn get_compound(&self, name: &str) -> Option<Compound> {
-        None
+    pub fn get_compound(&self, name: &str) -> sqlite::Result<Compound> {
+        let query = format!("
+        SELECT * FROM compounds
+            WHERE
+                name = '{}'", name);
+        self.compound_db
+            .prepare(query)?
+            .into_iter()
+            .map(|row| {
+                let row = row.unwrap();
+                let id = row.read::<i64, _>("id");
+                let atoms = self.get_atoms(id);
+                let bonds = self.get_bonds(id);
+                let focus = self.get_focus(id);
+                Compound {atoms, bonds, focus}
+            })
+            .next()
+            .ok_or(sqlite::Error{
+                code: None,
+                message: Some(format!("there is no compound {}", name))
+            })
     }
-    fn get_atoms(&self, name: &str) -> Vec<(AtomId, Atom)> {
-        let query = format!("SELECT * FROM atoms WHERE compound_id = {}", name);
+    pub fn save_compound(&self, name: &str, compound: Compound, focus: Option<AtomId>) -> sqlite::Result<()> {
+        let get_max_id = "SELECT MAX(id) AS max_id FROM compounds";
+        let comp_id = self.compound_db
+            .prepare(get_max_id)?
+            .into_iter()
+            .map(|row| {
+                let row = row.unwrap();
+                row.try_read::<i64, _>("max_id").unwrap_or(0)
+            })
+            .next()
+            .ok_or(sqlite::Error{
+                code: None,
+                message: Some("something went wrong".to_string())
+            })? as i32 + 1;
+        let mut add_compound = format!("INSERT INTO compounds VALUES ({}, '{}');\n", comp_id, name);
+        for (id, atom) in compound.atoms {
+            let insert_to_atoms = format!(
+                "INSERT INTO atoms VALUES ({}, {}, {}, {}, {}, {}, {});\n",
+                comp_id, id, atom.nuclide.elm.get_atomic_number(),
+                atom.nuclide.neutron_num, atom.charge,
+                atom.p.x, atom.p.y,
+            );
+            add_compound.push_str(insert_to_atoms.as_str());
+        }
+        for (from, to, bond_type) in compound.bonds {
+            let insert_to_bonds = format!(
+                "INSERT INTO bonds VALUES ({}, {}, {}, {});\n",
+                comp_id, from, to, bond_type.into_id(),
+            );
+            add_compound.push_str(insert_to_bonds.as_str());
+        }
+        if let Some(focus) = focus {
+            let insert_to_focuses = format!(
+                "INSERT INTO focuses VALUES ({}, {});\n",
+                comp_id, focus,
+            );
+            add_compound.push_str(insert_to_focuses.as_str());
+        }
+        add_compound.push_str("COMMIT;");
+        self.compound_db.execute(add_compound)
+    }
+    fn get_atoms(&self, compound_id: i64) -> Vec<(AtomId, Atom)> {
+        let query = format!("
+        SELECT * FROM atoms
+	        WHERE
+    	        compound_id = {}", compound_id);
         self.compound_db
             .prepare(query)
             .unwrap()
@@ -134,10 +198,45 @@ impl DBWrapper {
             .map(|row| {
                 let row = row.unwrap();
                 let id = row.read::<i64, _>("id") as i32;
-                let elm = Element::from_atomic_number(row.read::<i64, _>("elm_id") as i32);
-                (1, Atom::new(Element::default().into(), Vector::default()))
+                let elm = Element::from_atomic_number(row.read::<i64, _>("elm_id") as i32).unwrap();
+                let x = row.read::<f64, _>("x");
+                let y = row.read::<f64, _>("y");
+                (id, Atom::new(elm.into(), Vector::new(x, y)))
             })
-            .collect::<Vec<(AtomId, Atom)>>()
+            .collect()
+    }
+    fn get_bonds(&self, compound_id: i64) -> Vec<(AtomId, AtomId, BondType)> {
+        let query = format!("
+        SELECT * FROM bonds
+	        WHERE
+    	        compound_id = {}", compound_id);
+        self.compound_db
+            .prepare(query)
+            .unwrap()
+            .into_iter()
+            .map(|row| {
+                let row = row.unwrap();
+                let from = row.read::<i64, _>("from_atom") as i32;
+                let to = row.read::<i64, _>("to_atom") as i32;
+                let type_number = row.read::<i64, _>("bond_type_id");
+                (from, to, BondType::from_id(type_number as i32))
+            })
+            .collect()
+    }
+    fn get_focus(&self, compound_id: i64) -> Option<AtomId> {
+        let query = format!("
+        SELECT * FROM focuses
+            WHERE
+                compound_id = {}", compound_id);
+        self.compound_db
+            .prepare(query)
+            .unwrap()
+            .into_iter()
+            .map(|row| {
+                let row = row.unwrap();
+                row.read::<i64, _>("focus_atom") as i32
+            })
+            .next()
     }
 }
 
@@ -166,7 +265,7 @@ impl Default for ChemStruct {
         let bonds = HashMap::new();
         let next_id = 1;
         let display_mode = DisplayMode::default();
-        let db_path = "../data/basic_compound.db";
+        let db_path = "../data/basic_compounds.db";
         let db = DBWrapper::new(db_path);
         ChemStruct {
             atoms,
@@ -205,6 +304,34 @@ impl ChemStruct {
         self.next_id += 1;
         self.compensate_hydrogen(&new_atom_id, 1);
         return Some(new_atom_id);
+    }
+    pub fn new_compound(&mut self, name: &str) -> Option<AtomId> {
+        if let Ok(comp) = self.compound_db.get_compound(name) {
+            let now_atom_id = self.next_id;
+            let mut max_id = 0;
+            for (id, atom) in comp.atoms {
+                self.atoms.insert(now_atom_id + id, atom);
+                if id > max_id {
+                    max_id = id;
+                }
+            }
+            for (from, to, bond_type) in comp.bonds {
+                self.bonds.insert((now_atom_id + from, now_atom_id + to), bond_type);
+            }
+            self.next_id = now_atom_id + max_id + 1;
+            return comp.focus;
+        }
+        return None;
+    }
+    pub fn save_compound(&self, name: &str, focus: Option<AtomId>) -> sqlite::Result<()> {
+        let compound = Compound {
+            atoms: self.atoms.clone().into_iter().collect(),
+            bonds: self.bonds.clone().into_iter()
+                .map(|((from, to), bond_type)| (from, to, bond_type))
+                .collect(),
+            focus: None,
+        };
+        self.compound_db.save_compound(name, compound, focus)
     }
     pub fn get_point(&self, atom_id: AtomId) -> Option<Vector> {
         self.atoms.get(&atom_id).map(|atom| atom.get_point())
