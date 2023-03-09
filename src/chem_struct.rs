@@ -471,7 +471,7 @@ impl ChemStruct {
             // 結合長調節
             let para_v = (bond_v.dist() - base_bond_v.dist()) * x_axis.rotate(wtb);
             let para_v = &para_v;
-            let para_v = &Vector::new(0.0, 0.0);
+            // let para_v = &Vector::new(0.0, 0.0);
             // mikan
             println!("{}, {}", theta, para_v.dist());
             let tmp_origin = &self.atoms[b].get_point();
