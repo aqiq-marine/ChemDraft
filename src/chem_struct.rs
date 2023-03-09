@@ -1,9 +1,9 @@
 use crate::bond_type::{BondType, DoubleBond, SingleBond};
 use crate::element::{Element, Nuclide};
 use crate::vector::Vector;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::f64::consts::PI;
-use sqlite::{Connection, State};
+use sqlite::Connection;
 
 #[derive(Debug, Clone)]
 pub struct Atom {
@@ -58,6 +58,16 @@ impl Atom {
     }
     pub fn increase_charge(&mut self, increase: i32) {
         self.charge += increase;
+    }
+    pub fn get_valences(&self) -> i32 {
+        if self.charge < 0 {
+            return self.nuclide.elm.get_valences();
+        }
+        if self.nuclide.elm.get_lone_pair() > 0 {
+            self.nuclide.elm.get_valences() + self.charge
+        } else {
+            self.nuclide.elm.get_valences() - self.charge
+        }
     }
 }
 
@@ -253,15 +263,7 @@ pub struct ChemStruct {
 impl Default for ChemStruct {
     fn default() -> Self {
         let bond_len = 50.0;
-        let atoms = {
-            // let mut atoms = HashMap::new();
-            // let mut p = Vector::new(256.0, 256.0);
-            // let v = bond_len * Vector::new(1.0, 0.0).rotate(-PI / 6.0);
-            // for i in 0..8 {
-            //     p = p + v.rotate((i % 2) as f64 * PI / 3.0);
-            // }
-            HashMap::new()
-        };
+        let atoms = HashMap::new();
         let bonds = HashMap::new();
         let next_id = 1;
         let display_mode = DisplayMode::default();
@@ -337,7 +339,6 @@ impl ChemStruct {
         self.atoms.get(&atom_id).map(|atom| atom.get_point())
     }
     pub fn delete(&mut self, atom_id: &AtomId) -> Option<AtomId> {
-        println!("{}", self.atoms.len());
         if !self.atoms.contains_key(atom_id) {
             return None;
         }
@@ -384,22 +385,118 @@ impl ChemStruct {
         if !self.atoms.contains_key(&target) || !self.atoms.contains_key(&origin) {
             return;
         }
-        let mut uf = UnionFind::new(self.atoms.clone().into_keys().collect());
-        for ((atom1, atom2), _) in self.bonds.iter() {
-            let atom1 = *atom1;
-            let atom2 = *atom2;
-            if atom1 == target && atom2 == origin || atom1 == origin && atom2 == target {
-                continue;
-            }
-            uf.unite(atom1, atom2);
-        }
-        let origin = self.atoms[&origin].get_point();
+        let mut uf = self.separete_atoms_by_bonds(vec![(origin, target)]);
+        let origin_p = self.atoms[&origin].get_point();
         let target_root = uf.find(target);
         for (id, atom) in self.atoms.iter_mut() {
             let r = uf.find(*id);
             if r == target_root {
-                atom.rotate(theta, &origin);
+                atom.rotate(theta, &origin_p);
             }
+        }
+        self.recompensate(&origin);
+        if self.atoms.contains_key(&target) {
+            self.recompensate(&target);
+        }
+    }
+    pub fn opt_cycle(&mut self, origin: &AtomId, bond: &(AtomId, AtomId)) {
+        if !self.bonds.contains_key(bond) {
+            return;
+        }
+        let mut ad_list = HashMap::new();
+        for b in self.bonds.keys() {
+            ad_list.entry(b.0).or_insert(Vec::new())
+                .push(b.1);
+            ad_list.entry(b.1).or_insert(Vec::new())
+                .push(b.0);
+        }
+        let other = Self::get_other(bond, origin);
+        // 辺を含む最小の環を探索
+        let mut queue = VecDeque::new();
+        queue.push_back(other);
+        let mut min_path = HashMap::from([(other, *origin)]);
+        while let Some(visited) = queue.pop_front() {
+            let mut find_end = false;
+            for seen in ad_list[&visited].iter() {
+                if min_path.contains_key(seen) {
+                    continue;
+                }
+                if visited == other && seen == origin {
+                    continue;
+                }
+                min_path.entry(*seen).or_insert(visited);
+                queue.push_back(*seen);
+                if seen == origin {
+                    find_end = true;
+                    break;
+                }
+            }
+            if find_end {
+                break;
+            }
+        }
+        // 環のパス
+        let path = {
+            let mut path = vec![origin];
+            while let Some(pre_node) = path.last()
+                .and_then(|&last| min_path.get(last))
+                .filter(|&node| node != origin) {
+                path.push(pre_node);
+            }
+            // 関数脱出
+            if path.len() <= 1 {
+                return;
+            }
+            // otherを先頭としてorigin->otherとなるように変形
+            path.reverse();
+            path
+        };
+        let x_axis = Vector::new(1.0, 0.0);
+        let base_bond_v = self.atoms[&other].get_point() - self.atoms[origin].get_point();
+        let init_theta = x_axis.calc_angle(&base_bond_v);
+        let edges: Vec<(AtomId, AtomId)> = {
+            let mut rot_path = path.clone();
+            rot_path.rotate_right(1);
+            rot_path.into_iter().zip(path.clone())
+                .map(|(&b, &f)| (b, f))
+                .collect()
+        };
+        let mut uf = self.separete_atoms_by_bonds(edges.clone());
+        let roots: Vec<i32> = path.iter().map(|&node| uf.find(*node)).collect();
+        for (i, (&b, &f)) in path.iter().zip(&path[1..]).enumerate() {
+            let bond_v = self.atoms[f].get_point() - self.atoms[b].get_point();
+            let now_theta = x_axis.calc_angle(&bond_v);
+            let wtb = init_theta - (i + 1) as f64 * 2.0 * PI / path.len() as f64;
+            let theta = wtb - now_theta;
+            // 結合長調節
+            let para_v = (bond_v.dist() - base_bond_v.dist()) * x_axis.rotate(wtb);
+            let para_v = &para_v;
+            let para_v = &Vector::new(0.0, 0.0);
+            // mikan
+            println!("{}, {}", theta, para_v.dist());
+            let tmp_origin = &self.atoms[b].get_point();
+            for (id, atom) in self.atoms.iter_mut() {
+                let atom_root = uf.find(*id);
+                if roots[i..path.len() - 1].contains(&atom_root) && !path[..i].contains(&id) {
+                    atom.rotate(theta, tmp_origin);
+                }
+                if roots[(i+1)..path.len() - 1].contains(&atom_root) && !roots[..i+1].contains(&atom_root)
+                    || id == path[i+1] {
+                        atom.p = &atom.p - para_v;
+                }
+            }
+        }
+
+        edges.into_iter().fold(Vector::new(0.0, 0.0), |pre_v, e| {
+            let v = self.atoms[&e.1].get_point() - self.atoms[&e.0].get_point();
+            // 四角ではすべて0になってほしい
+            // println!("{}", v.dot(&pre_v));
+            // println!("{}", v.norm().calc_angle(&pre_v));
+            v
+        });
+
+        for atom in path {
+            self.recompensate(atom);
         }
     }
     pub fn change_bond(&mut self, bond_id: &(AtomId, AtomId), bond_type: BondType) {
@@ -487,9 +584,21 @@ impl ChemStruct {
             return None;
         }
     }
+    fn separete_atoms_by_bonds(&self, bonds: Vec<(AtomId, AtomId)>) -> UnionFind {
+        let mut uf = UnionFind::new(self.atoms.clone().into_keys().collect());
+        for ((atom1, atom2), _) in self.bonds.iter() {
+            let atom1 = *atom1;
+            let atom2 = *atom2;
+            if bonds.contains(&(atom1, atom2)) || bonds.contains(&(atom2, atom1)) {
+                continue;
+            }
+            uf.unite(atom1, atom2);
+        }
+        return uf;
+    }
     fn recompensate(&mut self, atom_id: &AtomId) {
-        for _ in 0..3 {
-            self.delete_hydrogen(atom_id);
+        while let Some(hydro_id) = self.get_connected_normal_h(atom_id) {
+            self.delete(&hydro_id);
         }
         self.compensate_hydrogen(atom_id, self.calc_connected_bond_num(atom_id));
     }
@@ -537,24 +646,26 @@ impl ChemStruct {
                     .rotate(2.0 * PI / 3.0)
                     .norm(),
                 3 => {
-                    let x = &Vector::new(1.0, 0.0);
-                    let calc_simi = |v: &Vector| {
-                        let sharpness = 4;
-                        atoms.iter().fold(0.0, |acc, cur| {
-                            let simi = (self.atoms[cur].get_point() - atom.get_point())
-                                .norm()
-                                .dot(v)
-                                .powi(2 * sharpness);
-                            acc + simi
-                        })
+                    let make_v = |i: usize| {
+                        let a = &self.atoms[&atoms[i]];
+                        let k = if a.nuclide.elm == Element::H {0.5} else {1.0};
+                        k * (a.get_point() - self.atoms[atom_id].get_point()).norm()
                     };
-                    let basic_direc = vec![
-                        x.rotate(PI / 6.0),
-                        x.rotate(5.0 * PI / 6.0),
-                        x.rotate(-PI / 2.0 + PI / 12.0),
-                        x.rotate(-PI / 2.0 - PI / 12.0),
-                    ];
-                    let similarity = basic_direc.iter().map(calc_simi);
+                    let v1 = make_v(0);
+                    let v2 = make_v(1);
+                    let v3 = make_v(2);
+                    let connected_vs = vec![v1.clone(), v2.clone(), v3.clone()];
+                    let basic_tetra: Vec<Vector> = {
+                        let v4 = Vector::new(0.0, 0.0);
+                        let angle = Self::calc_fit_tetra_angle(&v1, &v2, &v3, &v4);
+                        Vector::basic_tetra().iter()
+                            .map(|v| v.rotate(angle))
+                            .collect()
+                    };
+                    let similarity = basic_tetra.iter().map(|v| {
+                        let (simi, _) = v.most_similar(&connected_vs);
+                        simi
+                    });
                     // 適当な大きい数
                     let mut least_simi = 100.0;
                     let mut least_simi_index = 0;
@@ -564,20 +675,7 @@ impl ChemStruct {
                             least_simi_index = i;
                         }
                     }
-                    let v = basic_direc[least_simi_index].clone();
-                    let v0 = (self.atoms[&atoms[0]].get_point() - atom.get_point()).norm();
-                    let mp = basic_direc
-                        .iter()
-                        .fold(0.0, |acc: f64, cur| {
-                            let simi = v0.dot(cur);
-                            if simi.abs() > acc.abs() {
-                                simi
-                            } else {
-                                acc
-                            }
-                        })
-                        .signum();
-                    mp * v
+                    basic_tetra[least_simi_index].clone()
                 }
                 _ => {
                     let mut v = Vector::new(0.0, 0.0);
@@ -603,14 +701,8 @@ impl ChemStruct {
         }
         return result;
     }
-    fn get_connected_atoms_except_h(&self, atom_id: &AtomId) -> Vec<AtomId> {
-        self.get_connected_atoms(atom_id)
-            .into_iter()
-            .filter(|&atom| self.atoms[&atom].nuclide.elm == Element::H)
-            .collect()
-    }
     fn compensate_hydrogen(&mut self, atom_id: &AtomId, bond_order: i32) {
-        let v = self.atoms[atom_id].nuclide.elm.get_valences() - bond_order;
+        let v = self.atoms[atom_id].get_valences() - bond_order;
         for _ in 0..v {
             self.append(atom_id, Element::H.into());
         }
@@ -618,11 +710,11 @@ impl ChemStruct {
     fn delete_hydrogen(&mut self, atom_id: &AtomId) {
         let bond_num = self.calc_connected_bond_num(atom_id);
         let atom = &self.atoms[atom_id];
-        let val = atom.get_element().get_valences() - atom.charge;
+        let val = atom.get_valences();
         if bond_num - val < 0 {
             return;
         }
-        if let Some(hydrogen) = self.get_connected_hydrogen(atom_id) {
+        if let Some(hydrogen) = self.get_connected_normal_h(atom_id) {
             let h_bond = self.calc_connected_bond_num(&hydrogen);
             if h_bond != 1 {
                 return;
@@ -643,17 +735,32 @@ impl ChemStruct {
                     .get_bond_order()
             })
     }
-    fn get_connected_hydrogen(&self, atom_id: &AtomId) -> Option<AtomId> {
+    // 一番いい感じの消したい水素を優先的に選択する
+    fn get_connected_normal_h(&self, atom_id: &AtomId) -> Option<AtomId> {
         let bonds = self.get_connected_bonds(atom_id);
-        let mut dot = -1.0;
-        let axis = &Vector::new(self.bond_len, 0.0);
+        // 軸に近いほうから選択
+        let axis = {
+            let angle = if bonds.len() == 4 {
+                let origin = &self.atoms[atom_id].get_point();
+                let v: Vec<Vector> = bonds.iter().map(|b| {
+                    let other = Self::get_other(b, atom_id);
+                    let k = if self.atoms[&other].nuclide.elm == Element::H {0.5} else {1.0};
+                    k * (self.atoms[&other].get_point() - origin).norm()
+                }).collect();
+                // v.sort_by(|a, b| x_axis.calc_angle(a).partial_cmp(&x_axis.calc_angle(b)).unwrap());
+                // v.reverse();
+                Self::calc_fit_tetra_angle(&v[0], &v[1], &v[2], &v[3])
+            } else {
+                0.0
+            };
+            &Vector::new(1.0, 0.0).rotate(angle)
+        };
         let mut result = None;
+        let mut dot = -1.0;
+        let mut vert_h = None;
         for (atom1, atom2) in bonds {
-            let mut other = atom1;
-            let v = self.atoms[&atom2].get_point() - self.atoms[&atom1].get_point();
-            if &atom1 == atom_id {
-                other = atom2;
-            }
+            let v = (self.atoms[&atom2].get_point() - self.atoms[&atom1].get_point()).norm();
+            let other = Self::get_other(&(atom1, atom2), atom_id);
             if self.atoms[&other].nuclide.elm == Element::H {
                 let bond = self.get_connected_bonds(&other);
                 let td = axis.dot(&v).abs();
@@ -661,9 +768,47 @@ impl ChemStruct {
                     result = Some(other);
                     dot = td;
                 }
+                if bond.len() == 1 && (1000.0 * td).floor() == 0.0 {
+                    vert_h = Some(other);
+                }
             }
         }
-        return result;
+        // 垂直なやつしかなかったら、それを選択
+        if dot.abs() < (PI / 4.0).cos() {
+            return vert_h.or(result);
+        } else {
+            return result;
+        }
+    }
+    fn calc_fit_tetra_angle(v1: &Vector, v2: &Vector, v3: &Vector, v4: &Vector) -> f64 {
+        let basic_tetra = Vector::basic_tetra();
+        let test_tetra = vec![v1, v2, v3, v4];
+        let try_count = 6.0;
+        let step = 2.0 * PI / try_count;
+        let rotate_tetra = |tetra: &Vec<Vector>, theta: f64| -> Vec<Vector> {
+            tetra.iter().map(|v| v.rotate(theta)).collect()
+        };
+        let calc_simi = |vs1 : Vec<Vector>, vs2: &Vec<&Vector>| -> f64 {
+            vs2.iter()
+                .map(|v| {
+                    let (simi, _) = v.most_similar(&vs1);
+                    simi
+                })
+                .sum()
+        };
+        let mut max_similarity = -100.0;
+        let mut theta = 0.0;
+        for i in 0..try_count as i32 {
+            let rot_theta = i as f64 * step;
+            let rot_tetra = rotate_tetra(&basic_tetra, rot_theta);
+            let simi = calc_simi(rot_tetra, &test_tetra);
+            let simi = (1000.0 * simi).floor() / 1000.0;
+            if simi > max_similarity {
+                max_similarity = simi;
+                theta = rot_theta;
+            }
+        }
+        return theta;
     }
     pub fn get_connected_bonds(&self, atom_id: &AtomId) -> Vec<(AtomId, AtomId)> {
         let mut result = vec![];

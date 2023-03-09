@@ -183,6 +183,9 @@ impl Vector {
         let y = left_top.y <= self.y && self.y < right_bot.y;
         return x && y;
     }
+    // selfが基準
+    // selfはnorm
+    // 0-2pi
     pub fn calc_angle(&self, other: &Vector) -> f64 {
         let other = &other.norm();
         let mut theta = self.dot(other).acos();
@@ -190,6 +193,27 @@ impl Vector {
             theta = 2.0 * PI - theta;
         }
         return theta;
+    }
+    pub fn most_similar(&self, others: &Vec<Vector>) -> (f64, Vector) {
+        let mut max_simi = -1000.0;
+        let mut max_simi_vec = Vector::new(0.0, 0.0);
+        for v in  others.iter() {
+            let simi = self.dot(v);
+            if simi > max_simi {
+                max_simi = simi;
+                max_simi_vec = v.clone();
+            }
+        }
+        return (max_simi, max_simi_vec);
+    }
+    pub fn basic_tetra() -> Vec<Vector> {
+        let x_axis = Vector::new(1.0, 0.0);
+        vec![
+            x_axis.rotate(PI / 6.0),
+            x_axis.rotate(5.0 * PI / 6.0),
+            x_axis.rotate(3.0 * PI / 2.0 - PI / 12.0),
+            x_axis.rotate(3.0 * PI / 2.0 + PI / 12.0),
+        ]
     }
 }
 

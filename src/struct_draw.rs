@@ -114,7 +114,7 @@ impl StructDraw {
                     self.selected_atom = self.focus_atom.clone();
                 },
                 KeyCode::C => {
-                    // link atoms
+                    // connect atoms
                     let bond = self.selected_atom.zip(self.focus_atom)
                         .and_then(|(from, to)| self.chem_struct.connect_atoms(&from, &to));
                     if let Some(bond) = bond {
@@ -123,7 +123,7 @@ impl StructDraw {
                         self.selected_atom = None;
                     }
                 },
-                KeyCode::S  => {
+                KeyCode::N  => {
                     self.mode = StructDrawState::Input(InputFor::Save);
                 }
                 _ => {},
@@ -207,6 +207,15 @@ impl StructDraw {
                 _ => 0.0,
             };
             bond.map(|(s, e)| self.chem_struct.rotate(e, s, rot_theta));
+        }
+        if modifiers.alt() {
+            match key_code {
+                KeyCode::O => {
+                    self.focus_atom.zip(self.focus_bond)
+                        .map(|(origin, bond)| self.chem_struct.opt_cycle(&origin, &bond));
+                },
+                _ => {},
+            }
         }
         if modifiers.is_empty() {
             let mut change_bond = |bond: BondType| {
