@@ -2,6 +2,10 @@
 ゆくゆくは反応式や共鳴式も描けるようにしたい  
 データファイルの都合でsrcから実行してください  
 
+<video controls playsinline width="100%" autoplay loop muted="true" src=".\video\chemdraft1.mp4" type="video/mp4">
+    実際の様子
+</video>
+
 # キーバインド一覧
 ## 原子選択モード
 ### 原子追加

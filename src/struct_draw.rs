@@ -462,7 +462,7 @@ impl StructDraw {
         let hv = 3.0 * (to - from).rotate(PI / 2.0).norm();
         let hv = &hv;
         let length = (to - from).dist();
-        let step_len = 4.0;
+        let step_len = 3.0;
         let vv = to - from;
         let vv = &vv;
         let step = (length / step_len) as i32;
