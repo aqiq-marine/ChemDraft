@@ -11,6 +11,8 @@ pub fn init_database() {
 }
 
 fn insert_element(con: &Connection) {
+    let text = "INSERT INTO elements VALUES (0, 'Text')";
+    con.execute(text).unwrap();
     for i in 1..37 {
         if let Some(elm) = Element::from_atomic_number(i) {
             let statement = format!("INSERT INTO elements VALUES ({}, '{}')", i, elm.symbol());
@@ -43,6 +45,7 @@ fn create_database(con: &Connection) {
             compound_id INTEGER,
             id INTEGER,
             elm_id INTEGER,
+            atom_text TEXT,
             neutron_num INTEGER,
             charge INTEGER,
             x FLOAT,

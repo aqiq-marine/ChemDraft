@@ -123,6 +123,18 @@ impl StructDraw {
                         self.selected_atom = None;
                     }
                 },
+                KeyCode::S => {
+                    let result = self.chem_struct.temp_save(self.focus_atom);
+                    if let Err(err) = result {
+                        println!("{}", err);
+                    }
+                },
+                KeyCode::Z => {
+                    self.focus_atom = self.chem_struct.undo();
+                },
+                KeyCode::Y => {
+                    self.focus_atom = self.chem_struct.redo();
+                },
                 KeyCode::N  => {
                     self.mode = StructDrawState::Input(InputFor::Save);
                 }
