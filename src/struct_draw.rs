@@ -6,7 +6,7 @@ use iced::widget::canvas::{
 use iced::{
     Size,
     Theme, Rectangle,
-    Color,
+    Color, Command,
 };
 use std::f64::consts::PI;
 use crate::message::Message;
@@ -15,6 +15,8 @@ use crate::element::{Element, Nuclide};
 use crate::chem_struct::{self, ChemStruct, Atom};
 use crate::bond_type::{BondType, SingleBond, DoubleBond};
 use crate::vector::Vector;
+use crate::canvas_to_image;
+use crate::save_image;
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum StructDrawState {
@@ -23,6 +25,7 @@ pub enum StructDrawState {
     BondFocus,
     Input(InputFor),
     Move,
+    Capturing,
 }
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum InputFor {
@@ -68,19 +71,25 @@ impl StructDraw {
     pub fn handle_key(
         &mut self,
         modifiers: Modifiers, key_code: KeyCode,
-    ) {
+    ) -> iced::Command<Message> {
         match self.mode {
-            StructDrawState::AtomFocus => self.hk_on_atom_focus(modifiers, key_code),
+            StructDrawState::AtomFocus => {
+                let cmd = self.hk_on_atom_focus(modifiers, key_code);
+                self.canv.clear();
+                return cmd;
+            },
             StructDrawState::BondFocus => self.hk_on_bond_focus(modifiers, key_code),
             StructDrawState::Input(input_for) => self.hk_on_input_mode(modifiers, key_code, input_for),
             StructDrawState::Move => self.hk_on_move_mode(modifiers, key_code),
+            StructDrawState::Capturing => {},
         }
         self.canv.clear();
+        iced::Command::none()
     }
     fn hk_on_atom_focus(
         &mut self,
         modifiers: Modifiers, key_code: KeyCode,
-    ) {
+    ) -> Command<Message> {
         if modifiers.control() {
             let mut move_atom = |direc: Vector| {
                 let step = 5.0;
@@ -135,9 +144,21 @@ impl StructDraw {
                 KeyCode::Y => {
                     self.focus_atom = self.chem_struct.redo();
                 },
-                KeyCode::N  => {
+                KeyCode::N => {
                     self.mode = StructDrawState::Input(InputFor::Save);
                 }
+                KeyCode::I => {
+                    let bounds = self.calc_bounds_for_mol();
+                    let mode = self.mode;
+                    self.mode = StructDrawState::Capturing;
+                    let g = self.capture_canvas(bounds.clone());
+                    self.mode = mode;
+                    let future = canvas_to_image::geometry_to_image(g, bounds);
+                    return Command::perform(future, |image| {
+                        save_image::save_image(image);
+                        Message::Saved
+                    });
+                },
                 _ => {},
             }
         }
@@ -153,7 +174,7 @@ impl StructDraw {
         if modifiers.is_empty() {
             if let Some(elm) = Self::key2elm(key_code) {
                 self.append_nuclide(elm);
-                return;
+                return Command::none();
             }
             match key_code {
                 // 本当はバックスラッシュ
@@ -171,6 +192,7 @@ impl StructDraw {
                 _ => {}
             }
         }
+        Command::none()
     }
     fn key2direc(key_code: KeyCode) -> Vector {
         match key_code {
@@ -182,6 +204,7 @@ impl StructDraw {
         }
     }
     fn key2elm(key_code: KeyCode) -> Option<Nuclide> {
+
         let symbol = match key_code {
             KeyCode::H => "H",
             KeyCode::B => "B",
@@ -388,6 +411,7 @@ impl StructDraw {
     }
     fn draw_bond(frame: &mut Frame, bond_type: &BondType, from: &Vector, to: &Vector) {
         let stroke = Stroke::default();
+        // let stroke = Stroke::with_color(stroke, Color::new(0.0, 0.0, 1.0, 1.0));
         match bond_type {
             BondType::Single(single_type) => Self::draw_single_bond(frame, single_type, from, to, stroke),
             BondType::Double(double_type) => Self::draw_double_bond(frame, double_type, from, to, stroke),
@@ -403,7 +427,10 @@ impl StructDraw {
             SingleBond::Wide => {
                 let width = 4.0 * stroke.width;
                 let stroke = stroke.with_width(width);
-                Self::draw_norm_single_bond(frame, from, to, stroke)
+                let v = &(2.0 * (to - from).norm());
+                let from = from - v;
+                let to = to + v;
+                Self::draw_norm_single_bond(frame, &from, &to, stroke)
             },
         }
     }
@@ -645,6 +672,57 @@ impl StructDraw {
         let rect = Path::rectangle(left_top.into(), size);
         frame.fill(&rect, color);
     }
+
+    fn calc_bounds_for_mol(&self) -> Rectangle {
+        let margin = 50.0;
+        let mut left_top = Vector::new(512.0, 256.0);
+        let mut right_bot = Vector::new(512.0, 256.0);
+        let atoms = self.chem_struct.get_atoms()
+            .iter()
+            .map(|atom| atom.get_point())
+            .chain(
+                self.chem_struct.get_bonds()
+                    .into_iter()
+                    .map(|(_, f, t)| (f, t))
+                    .flat_map(|(f, t)| vec![f, t].into_iter())
+            ).collect::<Vec<Vector>>();
+        for p in atoms.iter() {
+            if p.x < left_top.x {
+                left_top.x = p.x;
+            }
+            if p.y < left_top.y {
+                left_top.y = p.y;
+            }
+            if p.x > right_bot.x {
+                right_bot.x = p.x;
+            }
+            if p.y > right_bot.y {
+                right_bot.y = p.y;
+            }
+        }
+        let bounds = Rectangle {
+            x: left_top.x as f32 - margin,
+            y: left_top.y as f32 - margin,
+            width: (right_bot.x - left_top.x) as f32 + 2.0 * margin,
+            height: (right_bot.y - left_top.y) as f32 + 2.0 * margin,
+        };
+        bounds
+    }
+    fn capture_canvas(&self, bounds: Rectangle) -> Vec<Geometry> {
+        let margin = 50.0;
+        let bounds = Rectangle {
+            x: bounds.x.min(0.0), 
+            y: bounds.y.min(0.0),
+            width: bounds.x.max(0.0) + bounds.width + margin,
+            height: bounds.y.max(0.0) + bounds.height + margin,
+        };
+        self.draw(
+            &StructDrawState::default(),
+            &Theme::default(),
+            bounds,
+            Cursor::Unavailable
+        )
+    }
 }
 
 impl Program<Message> for StructDraw {
@@ -676,7 +754,9 @@ impl Program<Message> for StructDraw {
             }
 
             if let Some(atom_p) = self.selected_atom.and_then(|id| self.chem_struct.get_point(id)) {
-                Self::mark_atom(frame, &atom_p, selected_color);
+                if self.mode != StructDrawState::Capturing {
+                    Self::mark_atom(frame, &atom_p, selected_color);
+                }
             }
 
             match self.mode {
@@ -699,6 +779,7 @@ impl Program<Message> for StructDraw {
                 StructDrawState::Input(_) => {
                     Self::write_text(frame, self.input.clone(), hint_color);
                 },
+                StructDrawState::Capturing => {},
             }
         });
         vec![chem_struct]

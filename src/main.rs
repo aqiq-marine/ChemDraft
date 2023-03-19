@@ -6,6 +6,7 @@ use iced::{
     Length,
     widget::canvas::{self, Canvas},
 };
+use env_logger;
 mod struct_draw;
 use struct_draw::StructDraw;
 mod message;
@@ -13,11 +14,16 @@ use message::Message;
 mod element;
 mod bond_type;
 mod chem_struct;
+mod db_wrapper;
 mod vector;
 mod init_database;
+mod canvas_to_image;
+mod save_image;
 
 fn main() -> iced::Result {
     // init_database::init_database();
+    std::env::set_var("RUST_BACKTRACE", "1");
+    env_logger::init();
     ChemDraft::run(Settings {
         antialiasing: true,
         default_font: Some(include_bytes!("../fonts/Myrica.TTC")),
@@ -54,9 +60,11 @@ impl Application for ChemDraft {
     }
     fn update(&mut self, message: Self::Message) -> Command<Self::Message> {
         match message {
-            Message::KeyEvent(modifiers, key_code) => self.struct_draw.handle_key(modifiers, key_code),
+            Message::KeyEvent(modifiers, key_code) => {
+                self.struct_draw.handle_key(modifiers, key_code)
+            },
+            _ => Command::none(),
         }
-        Command::none()
     }
     fn view(&self) -> Element<Self::Message> {
         Canvas::new(&self.struct_draw)
