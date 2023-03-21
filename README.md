@@ -4,6 +4,7 @@
 
 
 https://user-images.githubusercontent.com/126757126/224889083-4640b5d9-62fc-4fd4-b218-486a158c6308.mp4
+<img width="662" alt="pyrethrinI" src="https://user-images.githubusercontent.com/126757126/226516252-59f7e248-cc85-41b8-b621-13d592248f7f.png">
 
 
 # キーバインド一覧
