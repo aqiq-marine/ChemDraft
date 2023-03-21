@@ -302,11 +302,25 @@ impl ChemStruct {
     pub fn move_atom(&mut self, atom_id: &AtomId, v: &Vector) {
         self.atoms.get_mut(atom_id).map(|atom| atom.move_atom(v));
     }
+    pub fn move_atom_group(&mut self, atom_id: &AtomId, v: &Vector) {
+        let mut uf = self.separete_atoms_by_bonds(vec![]);
+        let root = uf.find(*atom_id);
+        let atoms: Vec<_> = self.atoms.keys().cloned().collect();
+        for id in atoms.into_iter() {
+            if uf.find(id) == root {
+                self.move_atom(&id, v);
+            }
+        }
+    }
     pub fn rotate(&mut self, target: AtomId, origin: AtomId, theta: f64) {
         if !self.atoms.contains_key(&target) || !self.atoms.contains_key(&origin) {
             return;
         }
-        let mut uf = self.separete_atoms_by_bonds(vec![(origin, target)]);
+        let ignore_bond: Vec<(AtomId, AtomId)> = self.bonds.iter()
+            .filter(|((f, t), _)| f == &origin || t == &origin)
+            .map(|(&(f, t), _)| (f, t))
+            .collect();
+        let mut uf = self.separete_atoms_by_bonds(ignore_bond);
         let origin_p = self.atoms[&origin].get_point();
         let target_root = uf.find(target);
         for (id, atom) in self.atoms.iter_mut() {

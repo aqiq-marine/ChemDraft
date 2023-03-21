@@ -90,6 +90,25 @@ impl StructDraw {
         &mut self,
         modifiers: Modifiers, key_code: KeyCode,
     ) -> Command<Message> {
+        if modifiers.control() && modifiers.shift() {
+            let mut move_atoms = |direc: Vector| {
+                let step = 5.0;
+                let v = step * direc;
+                self.focus_atom.map(|atom| {
+                    self.chem_struct.move_atom_group(&atom, &v);
+                });
+            };
+            match key_code {
+                KeyCode::H | KeyCode::J | KeyCode::K | KeyCode::L => {
+                    move_atoms(Self::key2direc(key_code));
+                },
+                _ => {}
+            }
+
+            return Command::none();
+        }
+                
+
         if modifiers.control() {
             let mut move_atom = |direc: Vector| {
                 let step = 5.0;
