@@ -4,4 +4,5 @@ use iced::keyboard::{KeyCode, Modifiers};
 pub enum Message {
     KeyEvent(Modifiers, KeyCode),
     Saved,
+    SaveErrorOccur,
 }

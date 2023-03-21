@@ -1,10 +1,12 @@
+use std::error::Error;
+
 use native_dialog::FileDialog;
 use image::{ImageBuffer, Rgba};
 
-pub fn save_image(image: ImageBuffer<Rgba<u8>, Vec<u8>>) {
+pub fn save_image(image: ImageBuffer<Rgba<u8>, Vec<u8>>) -> Result<(), Box<dyn Error>> {
     let path = FileDialog::new()
         .add_filter("PNG Image", &["png"])
-        .add_filter("JPEG Image", &["jpg", "jpeg"])
-        .show_open_single_file();
-    println!("{:?}", path);
+        .show_save_single_file()?.ok_or(native_dialog::Error::NoImplementation)?;
+    image.save(path)?;
+    Ok(())
 }

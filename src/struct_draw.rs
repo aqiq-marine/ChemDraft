@@ -155,8 +155,13 @@ impl StructDraw {
                     self.mode = mode;
                     let future = canvas_to_image::geometry_to_image(g, bounds);
                     return Command::perform(future, |image| {
-                        save_image::save_image(image);
-                        Message::Saved
+                        image.map_or(Message::SaveErrorOccur, |image| {
+                            if let Ok(_) = save_image::save_image(image) {
+                                Message::Saved
+                            } else {
+                                Message::SaveErrorOccur
+                            }
+                        })
                     });
                 },
                 _ => {},
