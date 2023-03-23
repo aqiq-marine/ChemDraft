@@ -247,6 +247,29 @@ impl StructDraw {
         &mut self,
         modifiers: Modifiers, key_code: KeyCode,
     ) {
+        let plus_minus_key = match key_code {
+            // キーボード配置が違う？
+            // 実際には;/+のキー
+            KeyCode::Equals => -1.0,
+            KeyCode::Minus => 1.0,
+            _ => 0.0,
+        };
+        if plus_minus_key != 0.0 {
+            let atom_s = self.focus_atom;
+            let bond = atom_s.zip(self.focus_bond).map(|(s, (a1, a2))| (s, if s == a1 {a2} else {a1}));
+
+            if modifiers.shift() {
+                let rot_theta = PI / 12.0 * plus_minus_key;
+                bond.map(|(s, e)| self.chem_struct.rotate(e, s, rot_theta));
+                return;
+            }
+            if modifiers.control() {
+                let rate = 0.1 * plus_minus_key;
+                bond.map(|(s, e)| self.chem_struct.shorten_bond(e, s, rate));
+                return;
+            }
+        }
+            
         if modifiers.control() {
             match key_code {
                 KeyCode::E => {
@@ -254,18 +277,6 @@ impl StructDraw {
                 },
                 _ => {},
             }
-        }
-        if modifiers.shift() {
-            let atom_s = self.focus_atom;
-            let bond = atom_s.zip(self.focus_bond).map(|(s, (a1, a2))| (s, if s == a1 {a2} else {a1}));
-            let rot_theta = PI / 12.0 * match key_code {
-                // キーボード配置が違う？
-                // 実際には;/+のキー
-                KeyCode::Equals => -1.0,
-                KeyCode::Minus => 1.0,
-                _ => 0.0,
-            };
-            bond.map(|(s, e)| self.chem_struct.rotate(e, s, rot_theta));
         }
         if modifiers.alt() {
             match key_code {

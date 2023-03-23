@@ -312,6 +312,21 @@ impl ChemStruct {
             }
         }
     }
+    pub fn shorten_bond(&mut self, target: AtomId, origin: AtomId, rate: f64) {
+        if !self.atoms.contains_key(&target) || !self.atoms.contains_key(&origin) {
+            return;
+        }
+        let v = rate * (self.atoms[&origin].get_point() - self.atoms[&target].get_point());
+        let v = &v;
+        let mut uf = self.separete_atoms_by_bonds(vec![(origin, target)]);
+        let root = uf.find(target);
+        let atoms: Vec<_> = self.atoms.keys().cloned().collect();
+        for id in atoms.into_iter() {
+            if uf.find(id) == root {
+                self.move_atom(&id, v);
+            }
+        }
+    }
     pub fn rotate(&mut self, target: AtomId, origin: AtomId, theta: f64) {
         if !self.atoms.contains_key(&target) || !self.atoms.contains_key(&origin) {
             return;
